@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
@@ -43,7 +44,7 @@ func main() {
 	defer config.dispatcher.Stop()
 
 	http.HandleFunc("/api", config.apiHandler)
-	http.HandleFunc("callback", config.callbackHander)
+	http.HandleFunc("/callback", config.callbackHander)
 	log.Println(http.ListenAndServe(config.Host+":"+config.Port, nil))
 }
 
@@ -67,7 +68,7 @@ func (c config) apiHandler(w http.ResponseWriter, r *http.Request) {
 	info, err := github.GetRepoInfo(token, repo)
 	if err != nil {
 		log.Println(err)
-		w.WriteHeader(500)
+		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 	var timestamps []int64
@@ -75,11 +76,11 @@ func (c config) apiHandler(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		log.Println(err)
-		w.WriteHeader(500)
+		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
-	w.WriteHeader(200)
+	w.WriteHeader(http.StatusOK)
 	err = lib.WriteCanvasJS(timestamps, info, w)
 	if err != nil {
 		log.Println(err)
@@ -89,10 +90,11 @@ func (c config) apiHandler(w http.ResponseWriter, r *http.Request) {
 func (c config) callbackHander(w http.ResponseWriter, r *http.Request) {
 	code := r.FormValue("code")
 	if code == "" {
-		w.WriteHeader(500)
+		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
+	log.Print(code)
 	resp, err := http.PostForm(accessTokenURL, url.Values{
 		"client_id":     []string{c.ClientID},
 		"client_secret": []string{c.ClientSecret},
@@ -100,16 +102,18 @@ func (c config) callbackHander(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		log.Println(err)
-		w.WriteHeader(500)
+		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	defer resp.Body.Close()
+	if resp != nil {
+		defer resp.Body.Close()
+	}
 
 	var bodyBytes []byte
-	_, err = resp.Body.Read(bodyBytes)
+	bodyBytes, err = ioutil.ReadAll(resp.Body)
 	if err != nil {
 		log.Println(err)
-		w.WriteHeader(500)
+		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 	var token string
@@ -118,7 +122,9 @@ func (c config) callbackHander(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(param, "access_token") {
 			tokenParam := strings.Split(param, "=")
 			token = tokenParam[1]
+			break
 		}
 	}
-	w.Header().Set("token", token)
+	w.Header().Set("Set-Cookie", "token="+token)
+	http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
 }
